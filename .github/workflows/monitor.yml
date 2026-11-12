@@ -1,0 +1,36 @@
+name: clickcode-monitor
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # GitHub may delay runs by a few minutes
+  workflow_dispatch: {}
+
+# Never two at once (the listener keeps one run busy for ~4 minutes)
+concurrency:
+  group: monitor
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Run checks, reports and Telegram listener
+        run: node src/main.js
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          API_URL: https://clickcode.onrender.com
+          SITE_URL: https://clickcode.co.il
+          LISTEN_SECONDS: '230'   # keeps listening for Telegram messages (only for a PUBLIC repo; use 0 for private)
