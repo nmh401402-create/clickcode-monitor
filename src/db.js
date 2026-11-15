@@ -1,6 +1,7 @@
 // Minimal Supabase REST client (read, plus the monitor's own state table). No dependencies.
 export function createDb(url, serviceKey, fetchImpl = fetch) {
-    const base = String(url || '').replace(/\/+$/, '');
+    // Accept the URL however it was pasted: trailing slash, or ending in /rest/v1.
+    const base = String(url || '').trim().replace(/\/+$/, '').replace(/\/rest\/v1$/i, '').replace(/\/+$/, '');
     const headers = { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` };
 
     async function select(table, query, { max = 20000 } = {}) {
