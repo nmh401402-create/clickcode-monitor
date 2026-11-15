@@ -10,11 +10,11 @@ const DRY = args.has('--dry');
 const LISTEN_SECONDS = Number(env.LISTEN_SECONDS || 0);
 const REMIND_MS = 3 * 3600_000;
 
-for (const k of ['SUPABASE_URL', 'SUPABASE_SERVICE_KEY']) {
-    if (!env[k]) {
-        console.error(`Missing required setting: ${k}`);
-        process.exit(1);
-    }
+const missing = ['SUPABASE_URL', 'SUPABASE_SERVICE_KEY'].filter((k) => !env[k]);
+if (missing.length) {
+    // Not set up yet: skip quietly (exit 0) so GitHub does not email a failure every 5 minutes.
+    console.log(`::warning::Monitor not configured yet, missing secrets: ${missing.join(', ')}`);
+    process.exit(0);
 }
 
 const db = createDb(env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY);
