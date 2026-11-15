@@ -1,5 +1,12 @@
 import { splitMessage } from './report.js';
 
+// Permanent buttons under the chat input (Telegram "reply keyboard").
+export const KEYBOARD = {
+    keyboard: [[{ text: 'מצב עכשיו' }], [{ text: 'דוח יומי' }, { text: 'דוח שבועי' }]],
+    resize_keyboard: true,
+    is_persistent: true,
+};
+
 export function createNotifier(env, fetchImpl = fetch) {
     const token = env.TELEGRAM_BOT_TOKEN;
     const chatId = env.TELEGRAM_CHAT_ID;
@@ -11,7 +18,7 @@ export function createNotifier(env, fetchImpl = fetch) {
             const res = await fetchImpl(`https://api.telegram.org/bot${token}/sendMessage`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ chat_id: chatId, text: part, disable_web_page_preview: true }),
+                body: JSON.stringify({ chat_id: chatId, text: part, disable_web_page_preview: true, reply_markup: KEYBOARD }),
                 signal: AbortSignal.timeout(15_000),
             }).catch(() => null);
             if (!res || !res.ok) ok = false;

@@ -1,86 +1,101 @@
 import { israelParts, summarize } from './analysis.js';
 
-const sec = (ms) => (ms == null ? '—' : `${(ms / 1000).toFixed(1)}ש׳`);
-const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : '—');
+const sec = (ms) => (ms == null ? '—' : `${Math.round(ms / 1000)} שניות`);
+const BAD = ['late', 'arrived_not_delivered', 'not_arrived'];
 
 function hourOf(iso) {
     return israelParts(new Date(iso)).hour;
 }
 
 /**
- * Plain-text Hebrew report. Never contains codes, phone numbers or message text.
- * Devices are shown only by the name stored in device_tokens.device_name.
+ * Plain Hebrew report for a non-technical reader.
+ * Never contains codes, phone numbers or message text.
+ * Devices/people are shown only by the name stored in device_tokens.device_name.
  */
 export function buildReport({ title, events, smsLogs, clients, devices, checks, now = Date.now() }) {
     const s = summarize({ events, smsLogs, now });
     const lines = [`📊 ${title}`, ''];
 
+    const badChecks = (checks || []).filter((c) => !c.ok);
     if (checks?.length) {
-        const bad = checks.filter((c) => !c.ok);
-        lines.push(bad.length ? `מערכות: ⚠️ ${bad.length} בעיות` : 'מערכות: ✅ הכל תקין');
-        for (const c of bad) lines.push(` • ${c.name}: ${c.detail}`);
+        lines.push(badChecks.length ? `🔴 יש ${badChecks.length} בעיות במערכת:` : '🟢 המערכת תקינה, כל הבדיקות עברו');
+        for (const c of badChecks) lines.push(`   • ${c.name}: ${c.detail}`);
         lines.push('');
     }
 
-    lines.push(`הודעות שהגיעו למערכת: ${smsLogs.length}`);
     if (!events.length) {
-        lines.push('לחיצות על "שלחו לי קוד": אין עדיין נתונים (המיגרציה/השרת החדש עוד לא פעילים).');
-    } else {
-        lines.push(`לחיצות על "שלחו לי קוד": ${s.total}`);
-        lines.push(` ✅ הוזרם קוד בזמן: ${s.tally.ok} (${pct(s.tally.ok, s.total)})`);
-        lines.push(` 🐢 איחור (מעל 20ש׳): ${s.tally.late}`);
-        lines.push(` ❌ הגיע ולא נמסר (אצלנו): ${s.tally.arrived_not_delivered}`);
-        lines.push(` ❌ לא הגיעה הודעה כלל: ${s.tally.not_arrived}`);
-        if (s.tally.pending) lines.push(` ⏳ עדיין מחכים: ${s.tally.pending}`);
-        lines.push(`זמן מלחיצה למסירה: חציוני ${sec(s.medianMs)}, 95% עד ${sec(s.p95Ms)}`);
-        lines.push('(הצלחת ההזרקה בתוך האתר עצמו עדיין לא נמדדת — שלב 2 עם התוסף.)');
+        lines.push(`הודעות שהגיעו למערכת: ${smsLogs.length}`);
+        lines.push('אין עדיין נתוני לחיצות לתקופה הזאת.');
+        return lines.join('\n');
     }
+
+    const real = s.total - s.tally.repeat - s.tally.pending; // clicks that can be judged
+    const good = s.tally.ok;
+    const problems = s.tally.late + s.tally.arrived_not_delivered + s.tally.not_arrived;
+    const rate = real ? Math.round((good / real) * 100) : null;
+
+    lines.push(
+        rate == null ? 'אין עדיין לחיצות שאפשר לשפוט.' : `${rate >= 90 ? '🟢' : rate >= 75 ? '🟡' : '🔴'} ${good} מתוך ${real} בקשות קוד הצליחו (${rate}%)`,
+    );
+    lines.push('');
+    lines.push('מה קרה בכל בקשה:');
+    lines.push(`✅ הקוד הגיע בזמן: ${s.tally.ok}`);
+    if (s.tally.late) lines.push(`🐢 הקוד הגיע באיחור (מעל 20 שניות): ${s.tally.late}`);
+    if (s.tally.not_arrived) lines.push(`📭 לא הגיעה הודעה כלל (חברת תקשורת / משרד החינוך): ${s.tally.not_arrived}`);
+    if (s.tally.arrived_not_delivered) lines.push(`🔧 ההודעה הגיעה אבל לא נמסרה (תקלה אצלנו): ${s.tally.arrived_not_delivered}`);
+    if (s.tally.repeat) lines.push(`🔁 לחיצות חוזרות אחרי הצלחה (לא נספרו ככישלון): ${s.tally.repeat}`);
+    if (s.tally.pending) lines.push(`⏳ עדיין מחכים לקוד: ${s.tally.pending}`);
+    lines.push('');
+    lines.push(`⏱ מהירות: בדרך כלל ${sec(s.medianMs)}, ובמקרים האיטיים עד ${sec(s.p95Ms)}`);
+    lines.push(`📩 הודעות שהגיעו למערכת בתקופה: ${smsLogs.length}`);
 
     const nameOf = new Map(clients.map((c) => [c.id, c.name]));
     const byClient = new Map();
     for (const r of s.clicks) {
         const k = r.clientId || r.userId || '?';
-        const t = byClient.get(k) || { ok: 0, late: 0, and: 0, na: 0, total: 0 };
-        t.total++;
-        if (r.kind === 'ok') t.ok++;
-        else if (r.kind === 'late') t.late++;
-        else if (r.kind === 'arrived_not_delivered') t.and++;
-        else if (r.kind === 'not_arrived') t.na++;
+        const t = byClient.get(k) || { good: 0, bad: 0 };
+        if (r.kind === 'ok') t.good++;
+        else if (BAD.includes(r.kind)) t.bad++;
         byClient.set(k, t);
     }
-    if (byClient.size) {
-        lines.push('', 'לפי לקוח (הבעייתיים קודם):');
-        const sorted = [...byClient.entries()].sort((a, b) => (b[1].late + b[1].and + b[1].na) - (a[1].late + a[1].and + a[1].na));
-        for (const [k, t] of sorted.slice(0, 20)) {
-            lines.push(` • ${nameOf.get(k) || 'לא ידוע'}: ${t.total} לחיצות, ${t.ok} בזמן, ${t.late} באיחור, ${t.and} לא נמסרו, ${t.na} לא הגיעו`);
-        }
-        if (sorted.length > 20) lines.push(` …ועוד ${sorted.length - 20} לקוחות`);
+    const clientsWithProblems = [...byClient.entries()].filter(([, t]) => t.bad).sort((a, b) => b[1].bad - a[1].bad).slice(0, 10);
+    if (byClient.size && clientsWithProblems.length) {
+        lines.push('', 'לקוחות עם בעיות:');
+        for (const [k, t] of clientsWithProblems) lines.push(`   • ${nameOf.get(k) || 'לא ידוע'}: ${t.bad} כישלונות מתוך ${t.good + t.bad}`);
+    } else if (byClient.size) {
+        lines.push('', 'לקוחות: אין לקוח עם בעיות 👍');
     }
 
     const byHour = new Array(24).fill(0);
     const badHour = new Array(24).fill(0);
     for (const r of s.clicks) {
+        if (!['ok', ...BAD].includes(r.kind)) continue;
         const h = hourOf(r.clickAt);
         byHour[h]++;
-        if (['late', 'arrived_not_delivered', 'not_arrived'].includes(r.kind)) badHour[h]++;
+        if (BAD.includes(r.kind)) badHour[h]++;
     }
-    const hours = byHour.map((n, h) => ({ h, n, bad: badHour[h] })).filter((x) => x.bad > 0).sort((a, b) => b.bad - a.bad).slice(0, 3);
-    if (hours.length) lines.push('', 'שעות עם הכי הרבה תקלות: ' + hours.map((x) => `${String(x.h).padStart(2, '0')}:00 (${x.bad} מתוך ${x.n})`).join(', '));
+    const hours = byHour.map((n, h) => ({ h, n, bad: badHour[h] })).filter((x) => x.bad >= 2).sort((a, b) => b.bad - a.bad).slice(0, 3);
+    if (hours.length) {
+        lines.push('', 'שעות עם הכי הרבה כישלונות:');
+        for (const x of hours) lines.push(`   • ${String(x.h).padStart(2, '0')}:00 — ${x.bad} מתוך ${x.n}`);
+    }
 
     const devName = new Map(devices.map((d) => [d.id, d.device_name]));
     const byDev = new Map();
     for (const r of s.clicks) {
-        if (!r.deviceId) continue;
+        if (!r.deviceId || !['ok', ...BAD].includes(r.kind)) continue;
         const t = byDev.get(r.deviceId) || { total: 0, bad: 0 };
         t.total++;
-        if (['late', 'arrived_not_delivered', 'not_arrived'].includes(r.kind)) t.bad++;
+        if (BAD.includes(r.kind)) t.bad++;
         byDev.set(r.deviceId, t);
     }
-    const devBad = [...byDev.entries()].filter(([, t]) => t.bad).sort((a, b) => b[1].bad - a[1].bad).slice(0, 5);
+    const devBad = [...byDev.entries()].filter(([, t]) => t.bad >= 2).sort((a, b) => b[1].bad - a[1].bad).slice(0, 5);
     if (devBad.length) {
-        lines.push('', 'מכשירים עם תקלות (לפי השם שנשמר):');
-        for (const [id, t] of devBad) lines.push(` • ${devName.get(id) || 'מכשיר לא מזוהה'}: ${t.bad} מתוך ${t.total}`);
+        lines.push('', 'מי נתקל בהכי הרבה כישלונות:');
+        for (const [id, t] of devBad) lines.push(`   • ${devName.get(id) || 'מכשיר לא מזוהה'}: ${t.bad} מתוך ${t.total}`);
     }
+
+    if (problems) lines.push('', 'ℹ️ "לא הגיעה הודעה" אומר שהמערכת לא קיבלה שום הודעה (לא בוובהוק ולא במייל) סביב הלחיצה.');
     return lines.join('\n');
 }
 

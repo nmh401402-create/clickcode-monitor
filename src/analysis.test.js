@@ -51,11 +51,11 @@ test('silent customer: used to get codes, none in 24h, only judged Mon-Thu', () 
 });
 
 test('report has counts, per-client lines, and never contains codes or phone numbers', () => {
-    const events = [ev({ latency_ms: 3000 }), ev({ click_at: iso(T0 + 1000), outcome: 'no_code', latency_ms: 25000 })];
+    const events = [ev({ latency_ms: 3000 }), ev({ click_at: iso(T0 + 30 * 60_000), outcome: 'no_code', latency_ms: 25000 })];
     const text = buildReport({ title: 'בדיקה', events, smsLogs: [], clients: [{ id: 'c1', name: 'צעדים' }], devices: [{ id: 'd1', device_name: 'Chrome A' }], checks: [], now: T0 + 3600_000 });
     assert.match(text, /צעדים/);
-    assert.match(text, /לא הגיעה הודעה כלל: 1/);
-    assert.match(text, /Chrome A/);
+    assert.match(text, /לא הגיעה הודעה כלל.*: 1/);
+    assert.match(text, /1 מתוך 2 בקשות קוד הצליחו/);
     assert.doesNotMatch(text, /\b\d{6}\b/);
     assert.equal(summarize({ events, smsLogs: [], now: T0 + 3600_000 }).total, 2);
 });
@@ -63,4 +63,13 @@ test('report has counts, per-client lines, and never contains codes or phone num
 test('long messages are split under the Telegram limit', () => {
     const parts = splitMessage(Array.from({ length: 600 }, (_, i) => `line ${i} xxxxxxxxxxxxxxxxxxxxxxxxxxx`).join('\n'));
     assert.ok(parts.length > 1 && parts.every((p) => p.length <= 4096));
+});
+
+test('a failed click right after a successful click of the same device is a re-click, not a failure', () => {
+    const events = [ev({ latency_ms: 3000 }), ev({ click_at: iso(T0 + 40_000), outcome: 'no_code', latency_ms: 25000 })];
+    const s = summarize({ events, smsLogs: [], now: T0 + 3600_000 });
+    assert.equal(s.tally.repeat, 1);
+    assert.equal(s.tally.not_arrived, 0);
+    const far = [ev({ latency_ms: 3000 }), ev({ click_at: iso(T0 + 30 * 60_000), outcome: 'no_code', latency_ms: 25000 })];
+    assert.equal(summarize({ events: far, smsLogs: [], now: T0 + 3600_000 }).tally.not_arrived, 1);
 });

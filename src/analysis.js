@@ -91,9 +91,15 @@ export function silentClients(clients, smsLogs, now = new Date()) {
 
 export function summarize({ events, smsLogs, now = Date.now() }) {
     const clicks = groupClicks(events);
-    const tally = { ok: 0, late: 0, arrived_not_delivered: 0, not_arrived: 0, pending: 0 };
+    const tally = { ok: 0, late: 0, arrived_not_delivered: 0, not_arrived: 0, pending: 0, repeat: 0 };
+    const REPEAT_MS = 3 * 60_000;
+    const deliveredByWho = clicks.filter((c) => c.delivered).map((c) => ({ who: c.deviceId || c.userId, t: Date.parse(c.clickAt) }));
     const rows = clicks.map((c) => {
-        const kind = classifyClick(c, smsLogs, now);
+        let kind = classifyClick(c, smsLogs, now);
+        // A failed click right next to a successful click of the same person is a re-click, not a real failure.
+        if (kind === 'not_arrived' && deliveredByWho.some((d) => d.who === (c.deviceId || c.userId) && Math.abs(d.t - Date.parse(c.clickAt)) <= REPEAT_MS)) {
+            kind = 'repeat';
+        }
         tally[kind]++;
         return { ...c, kind };
     });

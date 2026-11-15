@@ -91,16 +91,18 @@ async function maybeReports(checks, state, now) {
     }
 }
 
-const HELP = 'אפשר לשלוח:\nמצב — תמונת מצב עכשיו\nהיום — סיכום 24 שעות\nשבוע — סיכום 7 ימים\n(תשובה תוך כדקה-שתיים, לפעמים עד 5 דקות)';
+const HELP = 'אפשר ללחוץ על הכפתורים למטה:\nמצב עכשיו — מה קורה כרגע\nדוח יומי — 24 שעות אחרונות\nדוח שבועי — 7 ימים אחרונים';
 
 async function answer(text) {
     const t = text.toLowerCase().replace(/^\//, '');
-    if (/^(status|מצב|סטטוס|תמונת מצב)/.test(t)) {
+    if (/(status|מצב|סטטוס)/.test(t)) {
         const checks = await runChecks({ env, db });
-        return `📸 תמונת מצב\n${statusLines(checks)}\n\n${await report('שעתיים אחרונות', 2, null)}`;
+        const bad = checks.filter((c) => !c.ok);
+        const head = bad.length ? `🔴 יש ${bad.length} בעיות:\n${statusLines(bad)}` : `🟢 הכל תקין (${checks.length} בדיקות עברו)`;
+        return `📸 מצב עכשיו\n${head}\n\n${await report('שעתיים אחרונות', 2, null)}`;
     }
-    if (/^(today|היום|יומי)/.test(t)) return report('סיכום 24 שעות', 24, await runChecks({ env, db }));
-    if (/^(week|שבוע|שבועי)/.test(t)) return report('סיכום 7 ימים', 24 * 7, await runChecks({ env, db }));
+    if (/(today|היום|יומי)/.test(t)) return report('סיכום 24 שעות', 24, await runChecks({ env, db }));
+    if (/(week|שבוע)/.test(t)) return report('סיכום 7 ימים', 24 * 7, await runChecks({ env, db }));
     return HELP;
 }
 
