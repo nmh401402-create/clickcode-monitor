@@ -55,7 +55,7 @@ test('report has counts, per-client lines, and never contains codes or phone num
     const text = buildReport({ title: 'בדיקה', events, smsLogs: [], clients: [{ id: 'c1', name: 'צעדים' }], devices: [{ id: 'd1', device_name: 'Chrome A' }], checks: [], now: T0 + 3600_000 });
     assert.match(text, /צעדים/);
     assert.match(text, /לא הגיעה הודעה כלל.*: 1/);
-    assert.match(text, /1 מתוך 2 בקשות קוד הצליחו/);
+    assert.match(text, /1 מתוך 2 בקשות קוד קיבלו קוד/);
     assert.doesNotMatch(text, /\b\d{6}\b/);
     assert.equal(summarize({ events, smsLogs: [], now: T0 + 3600_000 }).total, 2);
 });

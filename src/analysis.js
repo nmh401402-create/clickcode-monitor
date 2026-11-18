@@ -97,7 +97,7 @@ export function summarize({ events, smsLogs, now = Date.now() }) {
     const rows = clicks.map((c) => {
         let kind = classifyClick(c, smsLogs, now);
         // A failed click right next to a successful click of the same person is a re-click, not a real failure.
-        if (kind === 'not_arrived' && deliveredByWho.some((d) => d.who === (c.deviceId || c.userId) && Math.abs(d.t - Date.parse(c.clickAt)) <= REPEAT_MS)) {
+        if ((kind === 'not_arrived' || kind === 'arrived_not_delivered') && deliveredByWho.some((d) => d.who === (c.deviceId || c.userId) && Math.abs(d.t - Date.parse(c.clickAt)) <= REPEAT_MS)) {
             kind = 'repeat';
         }
         tally[kind]++;
