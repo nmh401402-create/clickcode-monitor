@@ -73,3 +73,44 @@ test('a failed click right after a successful click of the same device is a re-c
     const far = [ev({ latency_ms: 3000 }), ev({ click_at: iso(T0 + 30 * 60_000), outcome: 'no_code', latency_ms: 25000 })];
     assert.equal(summarize({ events: far, smsLogs: [], now: T0 + 3600_000 }).tally.not_arrived, 1);
 });
+
+test('a click abandoned within seconds is not a failure and is not counted as judgeable', () => {
+    const events = [
+        ev({ outcome: 'no_code', latency_ms: 2000, waited_ms: 2000 }),
+        ev({ click_at: iso(T0 + 120_000), latency_ms: 5000, waited_ms: 5000 }),
+    ];
+    const [c] = groupClicks([events[0]]);
+    assert.equal(classifyClick(c, [], T0 + 600_000), 'abandoned');
+    const s = summarize({ events, smsLogs: [], now: T0 + 600_000 });
+    assert.equal(s.tally.abandoned, 1);
+    assert.equal(s.tally.not_arrived, 0);
+    // a full 25s wait with no code is still a failure
+    const [d] = groupClicks([ev({ outcome: 'no_code', latency_ms: 25000, waited_ms: 25000 })]);
+    assert.equal(classifyClick(d, [], T0 + 600_000), 'not_arrived');
+});
+
+test('SMS that reached us after the browser stopped asking is its own kind, not a delivery bug', () => {
+    const events = [
+        ev({ outcome: 'no_code', latency_ms: 25000, waited_ms: 25000, created_at: iso(T0 + 28_000) }),
+        ev({ outcome: 'aborted', latency_ms: 60000, waited_ms: 15000, created_at: iso(T0 + 85_000), reason: 'client_left' }),
+    ];
+    const late = [{ user_id: 'u1', created_at: iso(T0 + 137_000) }];
+    const [c] = groupClicks(events);
+    assert.equal(classifyClick(c, late, T0 + 900_000), 'arrived_after_left');
+    // message that arrived while the browser was still asking but was not handed out stays "our side"
+    const during = [{ user_id: 'u1', created_at: iso(T0 + 60_000) }];
+    assert.equal(classifyClick(c, during, T0 + 900_000), 'arrived_not_delivered');
+    const s = summarize({ events, smsLogs: late, now: T0 + 900_000 });
+    assert.equal(s.tally.arrived_after_left, 1);
+    assert.equal(s.abortedRequests, 1);
+});
+
+test('report shows delivery lag and parked codes, never codes or numbers', () => {
+    const events = [
+        ev({ outcome: 'delivered', latency_ms: 9000, waited_ms: 8000, sms_to_delivery_ms: 1500, parked_count: 1, created_at: iso(T0 + 9_000) }),
+    ];
+    const text = buildReport({ title: 't', events, smsLogs: [], clients: [], devices: [], checks: [], now: T0 + 900_000 });
+    assert.match(text, /החלק שלנו/);
+    assert.match(text, /כלל "התור" פעל/);
+    assert.ok(!/\d{6}/.test(text.replace(/\d{2}:\d{2}/g, '')));
+});

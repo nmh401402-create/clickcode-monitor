@@ -1,8 +1,9 @@
 import { israelParts, summarize } from './analysis.js';
 
 const sec = (ms) => (ms == null ? '—' : `${Math.round(ms / 1000)} שניות`);
-const BAD = ['arrived_not_delivered', 'not_arrived']; // real failures: no code was handed over
+const BAD = ['arrived_not_delivered', 'not_arrived', 'arrived_after_left']; // real failures: no code was handed over
 const KIND_TEXT = {
+    arrived_after_left: 'הקוד הגיע אחרי שהדפדפן הפסיק לחכות',
     not_arrived: 'לא הגיעה הודעה כלל',
     arrived_not_delivered: 'ההודעה הגיעה ולא נמסרה',
     late: 'הקוד הגיע באיחור',
@@ -38,9 +39,9 @@ export function buildReport({ title, events, smsLogs, clients, devices, checks, 
         return lines.join('\n');
     }
 
-    const real = s.total - s.tally.repeat - s.tally.pending; // clicks that can be judged
+    const real = s.total - s.tally.repeat - s.tally.pending - s.tally.abandoned; // clicks that can be judged
     const good = s.tally.ok + s.tally.late; // the code arrived (even if slowly)
-    const problems = s.tally.arrived_not_delivered + s.tally.not_arrived;
+    const problems = s.tally.arrived_not_delivered + s.tally.not_arrived + s.tally.arrived_after_left;
     const rate = real ? Math.round((good / real) * 100) : null;
 
     lines.push(
@@ -51,11 +52,18 @@ export function buildReport({ title, events, smsLogs, clients, devices, checks, 
     lines.push(`✅ הקוד הגיע בזמן: ${s.tally.ok}`);
     if (s.tally.late) lines.push(`🐢 הקוד הגיע באיחור (מעל 20 שניות): ${s.tally.late}`);
     if (s.tally.not_arrived) lines.push(`📭 לא הגיעה הודעה כלל (חברת תקשורת / משרד החינוך): ${s.tally.not_arrived}`);
+    if (s.tally.arrived_after_left) lines.push(`⌛ הקוד הגיע אבל אחרי שהדפדפן כבר הפסיק לחכות (למשל אימות ארוך): ${s.tally.arrived_after_left}`);
     if (s.tally.arrived_not_delivered) lines.push(`🔧 ההודעה הגיעה אבל לא נמסרה (תקלה אצלנו): ${s.tally.arrived_not_delivered}`);
     if (s.tally.repeat) lines.push(`🔁 לחיצות חוזרות אחרי הצלחה (לא נספרו ככישלון): ${s.tally.repeat}`);
+    if (s.tally.abandoned) lines.push(`🚪 עזבו תוך שניות (למשל בדיקת רובוט) — לא נספרו ככישלון: ${s.tally.abandoned}`);
     if (s.tally.pending) lines.push(`⏳ עדיין מחכים לקוד: ${s.tally.pending}`);
     lines.push('');
     lines.push(`⏱ מהירות: בדרך כלל ${sec(s.medianMs)}, ובמקרים האיטיים עד ${sec(s.p95Ms)}`);
+    if (s.deliveryLagMedianMs != null) {
+        lines.push(`⚡ החלק שלנו: מהגעת ההודעה למערכת עד מסירה, בדרך כלל ${sec(s.deliveryLagMedianMs)}, במקרים האיטיים עד ${sec(s.deliveryLagP95Ms)}`);
+    }
+    if (s.parkedClicks) lines.push(`🔀 קוד שהועבר ללחיצה קודמת (כלל "התור" פעל): ${s.parkedClicks} לחיצות`);
+    if (s.abortedRequests) lines.push(`🚪 בקשות שהדפדפן עזב באמצע ההמתנה: ${s.abortedRequests}`);
     lines.push(`📩 הודעות שהגיעו למערכת בתקופה: ${smsLogs.length}`);
 
     const nameOf = new Map(clients.map((c) => [c.id, c.name]));

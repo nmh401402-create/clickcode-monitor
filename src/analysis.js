@@ -1,6 +1,8 @@
 // Pure functions: no network, no secrets. Everything here is unit-tested.
 export const LATE_MS = 20_000;
 const PENDING_MS = 3 * 60_000; // a click this recent may still get its code
+export const ABANDON_MS = 10_000; // the person left within this long: not a system failure
+const LEFT_MARGIN_MS = 5_000; // the browser retries within ~1s; a message later than this found nobody asking
 
 export function israelParts(date = new Date()) {
     const f = new Intl.DateTimeFormat('en-GB', {
@@ -25,9 +27,16 @@ export function groupClicks(events) {
         const key = `${e.device_id || e.user_id || '-'}|${e.click_at}`;
         let c = map.get(key);
         if (!c) {
-            c = { key, clientId: e.client_id, userId: e.user_id, deviceId: e.device_id, clickAt: e.click_at, delivered: false, latencyMs: null };
+            c = { key, clientId: e.client_id, userId: e.user_id, deviceId: e.device_id, clickAt: e.click_at, delivered: false, latencyMs: null, maxWaitedMs: null, lastEventMs: null, parked: 0, aborted: 0, reasons: [] };
             map.set(key, c);
         }
+        // Diagnostics (migration 27). All optional: older rows simply do not have them.
+        const createdMs = Date.parse(e.created_at);
+        if (Number.isFinite(createdMs)) c.lastEventMs = c.lastEventMs == null ? createdMs : Math.max(c.lastEventMs, createdMs);
+        if (e.parked_count > 0) c.parked = Math.max(c.parked, e.parked_count);
+        if (e.outcome === 'aborted') c.aborted++;
+        if (e.reason && !c.reasons.includes(e.reason)) c.reasons.push(e.reason);
+        if (e.waited_ms != null) c.maxWaitedMs = c.maxWaitedMs == null ? e.waited_ms : Math.max(c.maxWaitedMs, e.waited_ms);
         if (e.outcome === 'delivered' || e.outcome === 'redelivered') c.delivered = true;
         if (e.outcome === 'delivered' && e.latency_ms != null) {
             c.latencyMs = c.latencyMs == null ? e.latency_ms : Math.min(c.latencyMs, e.latency_ms);
@@ -44,12 +53,20 @@ export function groupClicks(events) {
  */
 export function classifyClick(click, smsLogs, now = Date.now()) {
     if (click.delivered) return click.latencyMs != null && click.latencyMs > LATE_MS ? 'late' : 'ok';
+    // Left within seconds (e.g. stuck at the robot check, then clicked again): nothing to judge.
+    if (click.maxWaitedMs != null && click.maxWaitedMs < ABANDON_MS) return 'abandoned';
     const t = Date.parse(click.clickAt);
     if (now - t < PENDING_MS) return 'pending';
-    const arrived = smsLogs.some(
+    const around = smsLogs.filter(
         (s) => s.user_id === click.userId && Date.parse(s.created_at) >= t - 60_000 && Date.parse(s.created_at) <= t + 5 * 60_000,
     );
-    return arrived ? 'arrived_not_delivered' : 'not_arrived';
+    if (!around.length) return 'not_arrived';
+    // Every message reached us AFTER the extension had already stopped asking (e.g. a long robot check):
+    // not a delivery bug, the person's browser had given up waiting.
+    if (click.lastEventMs != null && around.every((s) => Date.parse(s.created_at) > click.lastEventMs + LEFT_MARGIN_MS)) {
+        return 'arrived_after_left';
+    }
+    return 'arrived_not_delivered';
 }
 
 export function percentile(values, p) {
@@ -91,21 +108,27 @@ export function silentClients(clients, smsLogs, now = new Date()) {
 
 export function summarize({ events, smsLogs, now = Date.now() }) {
     const clicks = groupClicks(events);
-    const tally = { ok: 0, late: 0, arrived_not_delivered: 0, not_arrived: 0, pending: 0, repeat: 0 };
+    const tally = { ok: 0, late: 0, arrived_not_delivered: 0, not_arrived: 0, pending: 0, repeat: 0, abandoned: 0, arrived_after_left: 0 };
     const REPEAT_MS = 3 * 60_000;
     const deliveredByWho = clicks.filter((c) => c.delivered).map((c) => ({ who: c.deviceId || c.userId, t: Date.parse(c.clickAt) }));
     const rows = clicks.map((c) => {
         let kind = classifyClick(c, smsLogs, now);
         // A failed click right next to a successful click of the same person is a re-click, not a real failure.
-        if ((kind === 'not_arrived' || kind === 'arrived_not_delivered') && deliveredByWho.some((d) => d.who === (c.deviceId || c.userId) && Math.abs(d.t - Date.parse(c.clickAt)) <= REPEAT_MS)) {
+        if ((kind === 'not_arrived' || kind === 'arrived_not_delivered' || kind === 'arrived_after_left') && deliveredByWho.some((d) => d.who === (c.deviceId || c.userId) && Math.abs(d.t - Date.parse(c.clickAt)) <= REPEAT_MS)) {
             kind = 'repeat';
         }
         tally[kind]++;
         return { ...c, kind };
     });
     const latencies = rows.filter((r) => r.latencyMs != null).map((r) => r.latencyMs);
+    // Time from "the code reached our system" to "handed to the extension" (our own part of the delay).
+    const lagMs = events.filter((e) => e.outcome === 'delivered' && e.sms_to_delivery_ms != null).map((e) => e.sms_to_delivery_ms);
     return {
         clicks: rows,
+        parkedClicks: rows.filter((r) => r.parked > 0).length, // the click-queue rule moved a code to an earlier click
+        abortedRequests: rows.reduce((n, r) => n + r.aborted, 0), // the browser left while the server was waiting
+        deliveryLagMedianMs: percentile(lagMs, 50),
+        deliveryLagP95Ms: percentile(lagMs, 95),
         tally,
         total: rows.length,
         delivered: tally.ok + tally.late,
